@@ -19,6 +19,7 @@ Usage: python3 scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT
 
 Extract hidden links and external links from all source code files in the directory (supports multi-threading acceleration and HTTP probing for suspected black links)
 
+```
 options:
   -h, --help            show this help message and exit
   -d DIRECTORY, --directory DIRECTORY
@@ -57,7 +58,7 @@ Common parameters, such as:
 python3 scan_blacklink.py -d /path/to/dir --probe
 
 During the process of scanning source code, extract corresponding domain names while simultaneously performing HTTP probes to obtain response information.
-
+```
 
 
 Simplified Chinese(简体中文):
