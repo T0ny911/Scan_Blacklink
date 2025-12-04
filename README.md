@@ -13,6 +13,10 @@ Most website systems are susceptible to blacklink injection. Analysis indicates 
 
 Therefore, I referenced the latest TLD list provided by the IANA Root Zone to accommodate most top-level domain suffixes on the internet. By employing multiple regular expressions, I ensured that third-party domain names within the local source code were extracted.
 
+💡Here are three scripts: Scan_Blacklink.py, Get_Pagesource.py, and Download_har.py.
+
+
+### 1、Scan_Blacklink:
 
 Usage: python3 scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT] [--no-timestamp] [-r] [-nr] [-e EXTENSIONS | -a] [-t THREADS] [-bl BLACKLIST] [--probe]
                [--probe-timeout PROBE_TIMEOUT] [--probe-workers PROBE_WORKERS]
@@ -60,6 +64,19 @@ python3 scan_blacklink.py -d /path/to/dir --probe
 During the process of scanning source code, extract corresponding domain names while simultaneously performing HTTP probes to obtain response information.
 ```
 
+###2、Get_Pagesource:
+
+This script's functionality involves using Selenium to simulate requests, then downloading the corresponding frontend page source code files locally. Simply define the target URL within the script code to enable automated crawling. Of course, you'll need to configure the proxy auto-switching mode to avoid having your IP blocked by WAF.
+
+Usage: python3 Get_Pagesource.py
+
+
+###3、Download_har:
+
+If you simply use the Get_Pagesource.py script to download the frontend page source files, some files may be missing. This is because many websites now employ asynchronous loading to enable faster access. Consequently, corresponding resource files are only loaded when you intentionally click a specific function or page during browsing. You can view detailed information about this loading process in the Network tab of your browser's console. Simultaneously, you can download the contents of the Network tab page—i.e., the currently loaded resource files—to your local machine as a har file. This file contains URLs pointing to all resource files. Simply executing the Download_har.py script will automatically download the corresponding resource files. The Download_har.py script was actually created to complement the Get_Pagesource.py script mentioned above. It enables the complete download of a target website's frontend source code, allowing you to even set it up locally. Of course, you'll need to configure the proxy auto-switching mode to avoid having your IP blocked by WAF.
+
+Usage: python3 Download_har.py
+
 
 ## Simplified Chinese(简体中文):
 
@@ -72,8 +89,13 @@ During the process of scanning source code, extract corresponding domain names w
 
 2、有可能是开发人员在开发网站的时候，直接远程调用了某些不安全的第三方资源，这些第三方资源本身就包含了黑链代码，导致网站被认为是被攻击者挂黑链，但实际上是开发人员的失误。【这是属于远程资源调用问题】
 
-
 因此，我参考了IANA根域提供的最新顶级域名列表，以覆盖互联网上绝大多数顶级域名后缀，并通过运用多重正则表达式，确保从本地源代码中提取出所有第三方域名。
+
+💡这里有三个脚本，分别是Scan_Blacklink.py、Get_Pagesource.py、Download_har.py
+
+
+
+### 1、Scan_Blacklink:
 
 usage: scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT] [--no-timestamp] [-r] [-nr] [-e EXTENSIONS | -a] [-t THREADS] [-bl BLACKLIST] [--probe]
                          [--probe-timeout PROBE_TIMEOUT] [--probe-workers PROBE_WORKERS]
@@ -119,3 +141,17 @@ python3 scan_blacklink.py -d /path/to/dir --probe
 
 在扫描源码的过程中提取对应的域名并同时进行HTTP探测获取响应信息
 ```
+
+
+###2、Get_Pagesource:
+
+这个脚本的功能是属于通过selenium去模拟请求后，然后把对应的前端页面源码内容文件进行下载到本地，只要在脚本代码里面定义好对应的目标URL即可进行自动爬取，当然需要设置好代理自动切换模式，避免被WAF封IP。
+
+Usage: python3 Get_Pagesource.py
+
+
+###3、Download_har:
+
+因为如果单纯的使用了Get_Pagesource.py脚本去下载前端页面源码内容文件的话，可能会存在部分文件缺失，因为目前很多网站为了能方便大家能够快速的访问，基本上都是用了异步加载方式，因此只有当你在浏览的过程中刻意去点击某个功能或者某个页面的时候才会加载对应的资源文件，这个加载的情况可以在浏览器的控制台的Network选项卡页面查看详细信息，那么同时也可以把Network选项卡的页面内容【即当前已经完成加载的资源文件】进行下载到本地为har文件，里面有指向所有资源文件的URL地址，那么只要执行这个Download_har.py脚本即可自动完成下载对应的资源文件，其实Download_har.py脚本的诞生是为了对上面的Get_Pagesource.py脚本的一个补充，可以完整的下载一个目标网站的前端源码，甚至你可以在本地搭建它。当然需要设置好代理自动切换模式，避免被WAF封IP。
+
+Usage: python3 Download_har.py
