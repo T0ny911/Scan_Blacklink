@@ -130,6 +130,6 @@ def download_files_from_har(har_file, save_dir, target_pageref="page_2"):
                 downloaded_files.append(file_path)
 
 # 使用示例
-har_file_path = 'www.olevod.com.har'  # 替换成你自己的.har文件路径
+har_file_path = 'www.example.com.har'  # 替换成你自己的.har文件路径
 save_directory = 'downloaded_resources1'  # 资源保存的根目录
 download_files_from_har(har_file_path, save_directory)
