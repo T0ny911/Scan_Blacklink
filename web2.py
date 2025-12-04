@@ -44,7 +44,7 @@ def extract_resources(driver, url):
     return urls
 
 def main():
-    target_url = 'https://www.olevod.com/index.php/vod/type/id/6.html'  # 目标网站URL
+    target_url = 'https://www.example.com'  # 目标网站URL
     driver = setup_driver()
     
     # 第二个需求：使用Selenium下载所有资源
