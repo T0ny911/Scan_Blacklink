@@ -79,6 +79,7 @@ usage: scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT] [--no-
 
 提取目录中所有源代码文件的暗链和外链地址（支持多线程加速，并可对疑似黑链进行HTTP探测）
 
+```
 options:
   -h, --help            show this help message and exit
   -d DIRECTORY, --directory DIRECTORY
@@ -116,3 +117,4 @@ options:
 python3 scan_blacklink.py -d /path/to/dir --probe
 
 在扫描源码的过程中提取对应的域名并同时进行HTTP探测获取响应信息
+```
