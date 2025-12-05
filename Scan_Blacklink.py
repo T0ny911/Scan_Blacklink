@@ -1,7 +1,7 @@
 import re
 import argparse
 import os
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -69,11 +69,16 @@ DEFAULT_SOURCE_EXTENSIONS = {
 
 # 黑链关键词（常见的黑链相关词汇）——默认就会参与“命中黑名单关键字”判断
 BLACKLINK_KEYWORDS = [
-    'casino', 'poker', 'viagra', 'cialis', 'porn', 'xxx', 'sex',
-    'gambling', 'loan', 'credit', 'pharmacy', 'pills',
     '博彩', '赌博', '色情', '成人', '贷款', '办证', '发票', '代开',
-    '六合彩', '时时彩', '彩票', '私服', '外挂', '游戏币','代理','Telegram','VPN','区块链','体育','直播','棋牌','赌场','娱乐城','提款','洗钱','黑网','黑产','黑客','破解','木马','病毒','钓鱼','诈骗'
+    '六合彩', '时时彩', '彩票', '私服', '外挂', '游戏币','代理','区块链','体育','直播','棋牌','赌场','娱乐城','提款','洗钱','黑网','黑产','黑客','破解','木马','病毒','钓鱼','诈骗'
 ]
+
+# BLACKLINK_KEYWORDS = [
+#     'casino', 'poker', 'viagra', 'cialis', 'porn', 'xxx', 'sex',
+#     'gambling', 'loan', 'credit', 'pharmacy', 'pills',
+#     '博彩', '赌博', '色情', '成人', '贷款', '办证', '发票', '代开',
+#     '六合彩', '时时彩', '彩票', '私服', '外挂', '游戏币','代理','Telegram','VPN','区块链','体育','直播','棋牌','赌场','娱乐城','提款','洗钱','黑网','黑产','黑客','破解','木马','病毒','钓鱼','诈骗'
+# ]
 
 # 在任意位置匹配“疑似域名”的正则（不要求 http:// 前缀）
 DOMAIN_REGEX = re.compile(
@@ -360,53 +365,98 @@ def normalize_url_for_probe(target):
 
 def probe_single_url(url, timeout=5.0, black_patterns=None, max_body_len=200000):
     """
-    对单个 URL 进行 HTTP 探测，返回状态码、部分响应头，以及页面是否命中黑链关键词
-    """
-    try:
-        resp = requests.get(url, timeout=timeout, allow_redirects=True, verify=False)
-        headers = dict(resp.headers)
-        interesting_headers = {}
-        for key in [
-            'Server', 'X-Powered-By', 'Location',
-            'Set-Cookie', 'Content-Type',
-            'Referrer-Policy', 'Content-Security-Policy'
-        ]:
-            if key in headers:
-                interesting_headers[key] = headers[key]
+    对单个 URL 进行 HTTP 探测：
+      1. 先按传入的 URL 原样访问（通常是 http://）
+      2. 如果原始 URL 是 http:// 且访问时抛出异常，则自动改为 https:// 再试一次
+      3. 成功任意一次就返回结果；两次都失败则返回最后一次的 error
 
-        # 在页面内容中匹配黑名单关键词
-        hits = []
-        if black_patterns:
-            try:
-                body = resp.text
-            except UnicodeDecodeError:
-                body = resp.content.decode('utf-8', errors='ignore')
-
-            body_lower = body[:max_body_len].lower()
-            for p in black_patterns:
-                if p and p in body_lower:
-                    hits.append(p)
-
-        return {
-            'status_code': resp.status_code,
-            'final_url': resp.url,
-            'headers': interesting_headers,
-            'body_keyword_hits': sorted(set(hits)),  # 这里保存命中的关键词
+    返回:
+        {
+          'status_code': int,
+          'final_url': str,
+          'headers': {...},
+          'body_keyword_hits': [...],
         }
-    except Exception as e:
-        return {'error': str(e)}
+        或 {'error': '...'}
+    """
+    # 构造尝试列表：先原始 URL，再可能的 https 版本
+    attempt_urls = [url]
+
+    parsed = urlparse(url)
+    # 只有在原始 scheme 是 http 时，才加一个 https 备选
+    if parsed.scheme == "http":
+        # 构造一个 https:// 的 URL，保留主机、路径和查询参数
+        https_parsed = parsed._replace(scheme="https", netloc=parsed.netloc)
+        https_url = urlunparse((
+            https_parsed.scheme,
+            https_parsed.netloc,
+            https_parsed.path or "",
+            https_parsed.params or "",
+            https_parsed.query or "",
+            ""  # fragment 对探测无意义，直接丢弃
+        ))
+        if https_url != url:
+            attempt_urls.append(https_url)
+
+    last_error = None
+
+    for attempt_url in attempt_urls:
+        try:
+            resp = requests.get(
+                attempt_url,
+                timeout=timeout,
+                allow_redirects=True,
+                verify=False
+            )
+
+            headers = dict(resp.headers)
+            interesting_headers = {}
+            for key in [
+                'Server', 'X-Powered-By', 'Location',
+                'Set-Cookie', 'Content-Type',
+                'Referrer-Policy', 'Content-Security-Policy'
+            ]:
+                if key in headers:
+                    interesting_headers[key] = headers[key]
+
+            # 在页面内容中匹配黑名单关键词
+            hits = []
+            if black_patterns:
+                try:
+                    body = resp.text
+                except UnicodeDecodeError:
+                    body = resp.content.decode('utf-8', errors='ignore')
+
+                body_lower = body[:max_body_len].lower()
+                for p in black_patterns:
+                    if p and p in body_lower:
+                        hits.append(p)
+
+            return {
+                'status_code': resp.status_code,
+                'final_url': resp.url,         # 可能已经被 302 到 https
+                'headers': interesting_headers,
+                'body_keyword_hits': sorted(set(hits)),
+                # 你要的话也可以额外加上这次真正请求的 URL：
+                # 'request_url': attempt_url,
+            }
+        except Exception as e:
+            # 记录错误，换下一个 URL 继续尝试（比如从 http 换 https）
+            last_error = str(e)
+
+    # 两次都失败（或者只有一次且失败）
+    return {'error': last_error or 'unknown error'}
 
 
 
 def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5.0):
     """
-    对疑似黑链 / 隐藏链接 / 外链 / 域名字符串进行 HTTP 探测
+    对疑似黑链 / 域名字符串进行 HTTP 探测（已在全局维度去重）
 
-    - 探测对象包括：
-        * suspicious_links（静态已经命中的）
-        * possible_hidden_links（隐藏链接）
-        * external_links（所有外链）
-        * domain_tokens（源码中出现的纯域名）
+    - 探测对象仅包括：
+        * suspicious_links（命中黑名单关键字的可疑链接/域名）
+        * domain_tokens（代码中出现的疑似域名字符串）
+    - 先基于上述两类数据在全局合并、去重，再进行 HTTP 探测，避免重复请求
     - 如果页面 Body 中命中黑名单关键词，则把对应链接回填到各文件的 suspicious_links 中
     """
     if requests is None:
@@ -416,24 +466,50 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
     # 统一将黑名单转为小写，以便匹配
     lower_black = [p.lower() for p in (black_patterns or [])]
 
-    # URL -> {(file_path, 原始字符串)} 映射，方便回填到具体文件
-    url_to_sources = {}
+    # ---------- 第 1 步：全局收集 & 去重原始字符串 ----------
+    # raw_targets 存放全局的“原始字符串”（可能是域名 / URL）
+    raw_targets = set()
     for file_path, links in all_results.items():
-        # 这些字段里的内容都作为探测目标
-        for key in ('suspicious_links', 'possible_hidden_links', 'external_links', 'domain_tokens'):
+        # 只基于这两个字段构建全局目标集合
+        for item in links.get('suspicious_links', []):
+            if item:
+                raw_targets.add(item.strip())
+        for item in links.get('domain_tokens', []):
+            if item:
+                raw_targets.add(item.strip())
+
+    if not raw_targets:
+        print("\n没有需要进行 HTTP 探测的链接/域名（suspicious_links & domain_tokens 为空）。")
+        return {}
+
+    # ---------- 第 2 步：原始字符串 -> 归一化 URL（去重） ----------
+    # url_to_sources 映射：
+    #   归一化后的 URL -> { (file_path, 原始字符串) , ... }
+    url_to_sources = {}
+
+    for file_path, links in all_results.items():
+        # 针对每个文件的 suspicious_links 和 domain_tokens 进行映射
+        for key in ('suspicious_links', 'domain_tokens'):
             for item in links.get(key, []):
-                u = normalize_url_for_probe(item)
+                if not item:
+                    continue
+                raw = item.strip()
+                if raw not in raw_targets:
+                    # 不在全局目标集合内（理论上不会出现），直接跳过
+                    continue
+                u = normalize_url_for_probe(raw)
                 if not u:
                     continue
-                url_to_sources.setdefault(u, set()).add((file_path, item))
+                url_to_sources.setdefault(u, set()).add((file_path, raw))
 
     targets = list(url_to_sources.keys())
     if not targets:
-        print("\n没有需要进行 HTTP 探测的链接。")
+        print("\n没有成功归一化为可探测 URL 的目标。")
         return {}
 
-    print(f"\n开始对 {len(targets)} 个链接进行 HTTP 探测（超时 {timeout}s，线程 {max_workers}）...")
+    print(f"\n开始对 {len(targets)} 个去重后的链接/域名进行 HTTP 探测（超时 {timeout}s，线程 {max_workers}）...")
 
+    # ---------- 第 3 步：并发探测 ----------
     results = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_url = {
@@ -456,7 +532,7 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
                     else:
                         print(f"[探测成功] {url} -> {info['status_code']} {info.get('final_url', '')}")
 
-            # 如果页面命中黑链关键词，则回填到对应文件的 suspicious_links 中
+            # ---------- 第 4 步：如果页面命中黑链关键词，则回填到对应文件的 suspicious_links 中 ----------
             hits = info.get('body_keyword_hits') or []
             if hits:
                 for file_path, raw in url_to_sources.get(url, []):
@@ -465,7 +541,6 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
                     all_results[file_path]['suspicious_links'] = sorted(existing)
 
     return results
-
 
 
 def format_results(all_results, probe_results=None):
@@ -479,14 +554,25 @@ def format_results(all_results, probe_results=None):
     total_domain_tokens = 0
     total_suspicious = 0
 
-    # 首先统计总数
+    # 全局去重集合（用于最终汇总）
+    global_domain_tokens = set()
+    global_suspicious_links = set()
+
+    # 首先统计总数 + 收集全局集合
     for file_path, links in all_results.items():
         total_hidden += len(links['possible_hidden_links'])
         total_external += len(links['external_links'])
         total_internal += len(links['internal_links'])
         total_other += len(links['other_links'])
-        total_domain_tokens += len(links.get('domain_tokens', []))
-        total_suspicious += len(links.get('suspicious_links', []))
+
+        file_domain_tokens = links.get('domain_tokens', [])
+        file_suspicious = links.get('suspicious_links', [])
+
+        total_domain_tokens += len(file_domain_tokens)
+        total_suspicious += len(file_suspicious)
+
+        global_domain_tokens.update(file_domain_tokens)
+        global_suspicious_links.update(file_suspicious)
 
     output.append("=" * 80)
     output.append("URL提取分析报告")
@@ -500,6 +586,8 @@ def format_results(all_results, probe_results=None):
     output.append(f"发现 {total_domain_tokens} 个疑似域名字符串（包括非完整URL形式）")
     if total_suspicious:
         output.append(f"其中 {total_suspicious} 个命中黑名单关键字（疑似黑链）")
+    else:
+        output.append(f"未发现命中黑名单关键字的链接/域名")
     output.append("=" * 80)
     output.append("")
 
@@ -554,8 +642,82 @@ def format_results(all_results, probe_results=None):
         output.append("-" * 80)
         output.append("")
 
-    # 附加 HTTP 探测结果
+    # ===================== 全局汇总区块（你想要的“最后统一整理”） =====================
+    output.append("=" * 80)
+    output.append("全局汇总（去重后的疑似域名字符串 & 可疑链接/域名）")
+    output.append("=" * 80)
+
+    dedup_domains = sorted(global_domain_tokens)
+    dedup_suspicious = sorted(global_suspicious_links)
+
+    output.append(f"去重后的疑似域名字符串总数: {len(dedup_domains)}")
+    if dedup_domains:
+        output.append("疑似域名字符串列表（去重后）：")
+        for d in dedup_domains:
+            output.append(f"  - {d}")
+    else:
+        output.append("疑似域名字符串列表（去重后）：(无)")
+
+    output.append("")
+    output.append(f"去重后的命中黑名单关键字的可疑链接/域名总数: {len(dedup_suspicious)}")
+    if dedup_suspicious:
+        output.append("命中黑名单关键字的可疑链接/域名列表（去重后）：")
+        for s in dedup_suspicious:
+            output.append(f"  - {s}")
+    else:
+        output.append("命中黑名单关键字的可疑链接/域名列表（去重后）：(无)")
+
+    output.append("")
+
+    # ===================== 附加 HTTP 探测结果 =====================
     if probe_results:
+        # 先做一个状态码维度的全局汇总（按原始探测 URL 去重）
+        status_buckets = {
+            200: set(),
+            404: set(),
+            403: set(),
+            401: set(),
+            302: set(),
+            "other": set(),   # 其他状态码统一归到这里
+        }
+
+        for url, info in probe_results.items():
+            if not isinstance(info, dict):
+                continue
+            if 'error' in info:
+                # 探测失败的不计入状态码汇总
+                continue
+            code = info.get('status_code')
+            if isinstance(code, int) and code in status_buckets:
+                status_buckets[code].add(url)   # 这里的 url 就是“原始探测 URL”
+            elif isinstance(code, int):
+                status_buckets["other"].add(url)
+
+        # 1. 先打印状态码汇总（你需要的那一块）
+        output.append("=" * 80)
+        output.append("HTTP 探测状态码汇总（按原始探测 URL 去重）")
+        output.append("=" * 80)
+
+        for code in [200, 404, 403, 401, 302]:
+            urls = sorted(status_buckets[code])
+            output.append(f"状态码 {code}: {len(urls)} 个 URL")
+            if urls:
+                for u in urls:
+                    output.append(f"  - {u}")
+            else:
+                output.append("  (无)")
+            output.append("")
+
+        other_urls = sorted(status_buckets["other"])
+        output.append(f"其他状态码: {len(other_urls)} 个 URL")
+        if other_urls:
+            for u in other_urls:
+                output.append(f"  - {u}")
+        else:
+            output.append("  (无)")
+        output.append("")
+
+        # 2. 再打印详细的 HTTP 探测结果（保留你原有的详细信息）
         output.append("=" * 80)
         output.append("HTTP 探测结果（按可疑URL归并）")
         output.append("=" * 80)
