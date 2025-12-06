@@ -840,12 +840,19 @@ def main():
     recursive = args.recursive and not args.no_recursive
 
     # 处理扫描模式
-    scan_all = args.all
     extensions = None
+    # 默认：扫描所有文件，避免漏任何后缀
+    scan_all = True
 
     if args.extensions:
+        # 如果显式指定了扩展名，则只扫描这些扩展名
+        scan_all = False
         extensions = {ext.strip().lower() for ext in args.extensions.split(',')}
         extensions = {ext if ext.startswith('.') else '.' + ext for ext in extensions}
+    elif args.all:
+        # 显式 --all 与默认行为一致，这里只是保持参数兼容
+        scan_all = True
+
 
     # 构造黑名单关键字/域名片段列表：内置 + 文件追加
     black_patterns = list(BLACKLINK_KEYWORDS)
@@ -868,12 +875,12 @@ def main():
     print(f"目标目录: {os.path.abspath(args.directory)}")
     print(f"递归扫描: {'是' if recursive else '否'}")
 
-    if scan_all:
+    if scan_all and not extensions:
         print("扫描模式: 扫描所有文件（不限扩展名）")
     elif extensions:
         print(f"扫描模式: 指定扩展名 {', '.join(sorted(extensions))}")
     else:
-        print(f"扫描模式: 默认扩展名（{len(DEFAULT_SOURCE_EXTENSIONS)} 种）")
+        print("扫描模式: 扫描所有文件（当前未指定扩展名）")
 
     print(f"线程数量: {args.threads}")
     print(f"输出文件: {os.path.abspath(output_file)}")
