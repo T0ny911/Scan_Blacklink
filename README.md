@@ -62,7 +62,11 @@ Example:
   scan_blacklink.py --probe                          # Perform HTTP probe on suspected blacklinks
 
 Common parameters, such as:
-python3 scan_blacklink.py -d /path/to/dir --probe
+1. python3 scan_blacklink.py -d /path/to/dir
+Scan source code only and extract corresponding domain names
+
+2. python3 scan_blacklink.py -d /path/to/dir --probe
+During source code scanning, extract corresponding domain names while performing HTTP probes to obtain response information
 
 During the process of scanning source code, extract corresponding domain names while simultaneously performing HTTP probes to obtain response information.
 ```
@@ -156,7 +160,6 @@ options:
 仅扫描源码并提取对应的域名
 
 2、python3 scan_blacklink.py -d /path/to/dir --probe
-
 在扫描源码的过程中提取对应的域名并同时进行HTTP探测获取响应信息
 ```
 
