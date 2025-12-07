@@ -18,8 +18,7 @@ Therefore, I referenced the latest TLD list provided by the IANA Root Zone to ac
 
 ### 1、Scan_Blacklink:
 
-Usage: python3 scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT] [--no-timestamp] [-r] [-nr] [-e EXTENSIONS | -a] [-t THREADS] [-bl BLACKLIST] [--probe]
-               [--probe-timeout PROBE_TIMEOUT] [--probe-workers PROBE_WORKERS]
+usage: scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT] [--no-timestamp] [--progress-file PROGRESS_FILE] [-r] [-nr] [-e EXTENSIONS | -a] [-t THREADS] [-bl BLACKLIST] [--probe] [--probe-timeout PROBE_TIMEOUT] [--probe-workers PROBE_WORKERS]
 
 Extract hidden links and external links from all source code files in the directory (supports multi-threading acceleration and HTTP probing for suspected black links)
 
@@ -33,6 +32,9 @@ options:
   -o OUTPUT, --output OUTPUT
                         Output file path. Default: automatically generates filenames with timestamps
   --no-timestamp        Output filenames without timestamps
+  --progress-file PROGRESS_FILE
+                        Progress log file path (JSONL, one entry per line), used for resuming interrupted runs;
+                        defaults to .url_extraction_progress.jsonl in the target directory if not specified.
   -r, --recursive       Recursively process subdirectories (enabled by default)
   -nr, --no-recursive   Do not recursively process subdirectories
   -e EXTENSIONS, --extensions EXTENSIONS
@@ -51,6 +53,7 @@ options:
 
 Example:
   scan_blacklink.py -d /path/to/dir                  # Scan specified directory
+  scan_blacklink.py --progress-file cache.jsonl      # Specify progress file (By default, it reads the JSONL progress file generated in the source code directory.)
   scan_blacklink.py --all                            # Scan all files (no extension restrictions)
   scan_blacklink.py -e html,php,js                   # Scan only specified extensions
   scan_blacklink.py -t 8                             # Use 8 threads for acceleration
@@ -66,7 +69,7 @@ During the process of scanning source code, extract corresponding domain names w
 
 Dec 17 update:
 
-Added script program execution recovery functionality; parameters remain unchanged.
+Added script execution recovery functionality. The default behavior remains unchanged: it will read the generated JSONL progress file in the source code directory. Alternatively, you can specify a custom path to load the JSONL progress file using the `--progress-file` parameter.
 
 ❗️However, note that when the program resumes execution, it will create a .jsonl file within the current source code directory. After the script completes, this file must be manually deleted to prevent subsequent executions from referencing its contents, which could lead to inaccurate results.
 
@@ -108,10 +111,9 @@ Usage: python3 Download_har.py
 
 ### 1、Scan_Blacklink:
 
-usage: scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT] [--no-timestamp] [-r] [-nr] [-e EXTENSIONS | -a] [-t THREADS] [-bl BLACKLIST] [--probe]
-                         [--probe-timeout PROBE_TIMEOUT] [--probe-workers PROBE_WORKERS]
+usage: scan_blacklink.py [-h] [-d DIRECTORY] [-b BASE_DOMAIN] [-o OUTPUT] [--no-timestamp] [--progress-file PROGRESS_FILE] [-r] [-nr] [-e EXTENSIONS | -a] [-t THREADS] [-bl BLACKLIST] [--probe] [--probe-timeout PROBE_TIMEOUT] [--probe-workers PROBE_WORKERS]
 
-提取目录中所有源代码文件的暗链和外链地址（支持多线程加速，并可对疑似黑链进行HTTP探测）
+提取目录中所有源代码文件的暗链和外链地址（支持多线程加速、断点续跑，并可对疑似黑链进行HTTP探测）
 
 ```
 options:
@@ -123,15 +125,17 @@ options:
   -o OUTPUT, --output OUTPUT
                         输出文件路径，默认自动生成带时间戳的文件名
   --no-timestamp        输出文件名不包含时间戳
+  --progress-file PROGRESS_FILE
+                        进度记录文件路径（JSONL，一行一条），用于断点续跑；不指定则默认放在目标目录下 .url_extraction_progress.jsonl
   -r, --recursive       是否递归处理子目录（默认启用）
   -nr, --no-recursive   不递归处理子目录
   -e EXTENSIONS, --extensions EXTENSIONS
-                        逗号分隔的文件扩展名（如: html,php,js）或（.html,.php,.js）
+                        逗号分隔的文件扩展名（如: html,php,js 或 .html,.php,.js）
   -a, --all             扫描所有文件（不限扩展名，可能较慢）
   -t THREADS, --threads THREADS
                         线程数（默认为4，建议范围：1-16）
   -bl BLACKLIST, --blacklist BLACKLIST
-                        黑链域名/关键字列表文件，每行一个，支持子串匹配（如：ceshi.xyz、ppp.qr 等），会在内置关键词基础上追加
+                        黑链域名/关键字列表文件，每行一个，支持子串匹配
   --probe               对命中的疑似黑链/隐藏链接进行HTTP探测（需要安装requests库）
   --probe-timeout PROBE_TIMEOUT
                         HTTP探测超时时间（秒），默认5秒
@@ -139,23 +143,26 @@ options:
                         HTTP探测并发线程数，默认8
 
 示例:
-  scan_blacklink.py -d /path/to/dir                  # 扫描指定目录
-  scan_blacklink.py --all                            # 扫描所有文件（不限扩展名）
+  scan_blacklink.py -d /path/to/dir                  # 扫描指定目录（默认全后缀）
+  scan_blacklink.py --progress-file cache.jsonl      # 指定进度文件【默认会读取在源码目录下生成的jsonl进度文件】
   scan_blacklink.py -e html,php,js                   # 只扫描指定扩展名
   scan_blacklink.py -t 8                             # 使用8个线程加速
   scan_blacklink.py -b https://example.com           # 指定基础域名识别外链
-  scan_blacklink.py -bl blacklist.txt                # 在内置关键词基础上追加黑链域名/关键字列表
+  scan_blacklink.py -bl blacklist.txt                # 追加黑链域名/关键字列表
   scan_blacklink.py --probe                          # 对疑似黑链进行HTTP探测
 
 常用的参数，比如：
-python3 scan_blacklink.py -d /path/to/dir --probe
+1、python3 scan_blacklink.py -d /path/to/dir 
+仅扫描源码并提取对应的域名
+
+2、python3 scan_blacklink.py -d /path/to/dir --probe
 
 在扫描源码的过程中提取对应的域名并同时进行HTTP探测获取响应信息
 ```
 
 12月7日更新: 
 
-新增脚本程序恢复执行功能，使用参数依然不变
+新增脚本程序恢复执行功能，使用参数依然不变，默认会读取在源码目录下生成的jsonl进度文件，亦可使用该参数【--progress-file】去自定义路径加载jsonl进度文件
 
 ❗️但要注意，程序恢复执行功能，它会在当前源码目录里面创建一个.jsonl文件，当脚本程序完成后，需要手动删除该文件，避免过一段时间后再次执行该脚本会调用这个进度文件内容，造成结果不准确的现象。
 
