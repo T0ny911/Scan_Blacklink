@@ -1,6 +1,7 @@
 import re
 import argparse
 import os
+import json
 from urllib.parse import urlparse, urlunparse
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,71 +15,13 @@ try:
 except ImportError:
     requests = None
 
-# 默认源代码文件扩展名（更全面的列表）
-DEFAULT_SOURCE_EXTENSIONS = {
-    # Web前端
-    '.html', '.htm', '.xhtml', '.shtml', '.dhtml',
-    '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
-    '.css', '.scss', '.sass', '.less', '.styl', '.stylus',
-    '.vue', '.svelte', '.astro',
-
-    # Web后端
-    '.php', '.php3', '.php4', '.php5', '.phtml',
-    '.asp', '.aspx', '.ascx', '.ashx', '.asmx',
-    '.jsp', '.jspx', '.jhtml',
-    '.cgi', '.pl', '.pm',
-
-    # 编程语言
-    '.py', '.pyw', '.pyi', '.pyc',
-    '.java', '.class', '.jar',
-    '.c', '.h', '.cpp', '.cxx', '.cc', '.hpp', '.hxx',
-    '.cs', '.vb', '.fs', '.fsx',
-    '.go', '.rs',
-    '.rb', '.rake', '.rbw',
-    '.swift', '.kt', '.kts',
-    '.scala', '.groovy',
-    '.lua', '.r',
-
-    # 脚本和配置
-    '.sh', '.bash', '.zsh', '.fish',
-    '.bat', '.cmd', '.ps1', '.psm1',
-    '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.config',
-    '.json', '.json5', '.jsonc',
-    '.xml', '.xsl', '.xslt', '.xsd',
-
-    # 模板文件
-    '.tmpl', '.tpl', '.template',
-    '.ejs', '.pug', '.jade', '.hbs', '.handlebars',
-    '.erb', '.haml', '.slim',
-    '.ftl', '.vm', '.twig',
-
-    # 文档和说明
-    '.md', '.markdown', '.mdown', '.mkd',
-    '.rst', '.txt', '.text',
-    '.adoc', '.asciidoc',
-
-    # 数据和其他
-    '.sql', '.db', '.sqlite',
-    '.csv', '.tsv',
-    '.log',
-    '.env', '.env.local', '.env.production',
-    '.properties', '.gradle', '.maven',
-    '.dockerfile', '.makefile', '.cmake',
-    '.htaccess', '.htpasswd', '.nginx'
-}
-
 # 黑链关键词（常见的黑链相关词汇）——默认就会参与“命中黑名单关键字”判断
 BLACKLINK_KEYWORDS = [
     '博彩', '赌博', '色情', '成人', '贷款', '办证', '发票', '代开',
-    '六合彩', '时时彩', '彩票', '私服', '外挂', '游戏币','代理','区块链','体育','直播','棋牌','赌场','娱乐城','提款','洗钱','黑网','黑产','黑客','破解','木马','病毒','钓鱼','诈骗'
+    '六合彩', '时时彩', '彩票', '私服', '外挂', '游戏币', '代理', '区块链',
+    '体育', '直播', '棋牌', '赌场', '娱乐城', '提款', '洗钱', '黑网',
+    '黑产', '黑客', '破解', '木马', '病毒', '钓鱼', '诈骗'
 ]
-
-# BLACKLINK_KEYWORDS = [
-#     'casino', 'poker', 'viagra', 'cialis', 'porn', 'xxx', 'sex',
-#     'gambling', 'loan', 'credit', 'pharmacy', 'pills',
-#     '博彩', '赌博', '色情', '成人', '贷款', '办证', '发票', '代开',
-#     '六合彩', '时时彩', '彩票', '私服', '外挂', '游戏币','代理','Telegram','VPN','区块链','体育','直播','棋牌','赌场','娱乐城','提款','洗钱','黑网','黑产','黑客','破解','木马','病毒','钓鱼','诈骗'
-# ]
 
 # 在任意位置匹配“疑似域名”的正则（不要求 http:// 前缀）
 DOMAIN_REGEX = re.compile(
@@ -86,63 +29,43 @@ DOMAIN_REGEX = re.compile(
     re.IGNORECASE
 )
 
-# 线程锁用于打印
+# 线程锁
 print_lock = threading.Lock()
+progress_lock = threading.Lock()
 
 
 def extract_links(source_code, base_domain=None, black_patterns=None):
     """
     从源代码中提取所有链接，并区分外链和可能的暗链，同时提取纯域名字符串并做黑名单匹配
-
-    参数:
-        source_code: 源代码字符串
-        base_domain: 基础域名，用于判断是否为外链
-        black_patterns: 黑链关键字/域名片段列表，做子串匹配
-
-    返回:
-        包含所有链接信息的字典
     """
     # 匹配URL的正则表达式模式
     url_patterns = [
-        # 完整URL (http://, https://)
-        r'https?://[^\s"\'<>\)]+',
-        # a标签中的href
-        r'href=["\']([^"\']+)["\']',
+        r'https?://[^\s"\'<>\)]+',             # 完整URL (http://, https://)
+        r'href=["\']([^"\']+)["\']',           # a标签中的href
         r'href=([^\s>]+)',
-        # iframe、img、script等标签中的src
-        r'src=["\']([^"\']+)["\']',
+        r'src=["\']([^"\']+)["\']',            # iframe、img、script等标签中的src
         r'src=([^\s>]+)',
-        # link标签中的href
-        r'<link[^>]*href=["\']([^"\']+)["\']',
-        # 脚本中的location、window.open等
+        r'<link[^>]*href=["\']([^"\']+)["\']', # link标签中的href
         r'location\s*[=:]\s*["\']([^"\']+)["\']',
         r'window\.open\(["\']([^"\']+)["\']',
         r'window\.location\s*=\s*["\']([^"\']+)["\']',
-        # 带协议的URL (//开头)
-        r'//[^\s"\'<>\)]+',
-        # action属性（表单提交地址）
-        r'action=["\']([^"\']+)["\']',
-        # data属性中的URL
+        r'//[^\s"\'<>\)]+',                    # 带协议的URL (//开头)
+        r'action=["\']([^"\']+)["\']',         # form action
         r'data-[a-z-]+=["\']https?://[^"\']+["\']',
-        # CSS中的url()
-        r'url\(["\']?([^"\'()]+)["\']?\)',
-        # JavaScript中的fetch、ajax等
+        r'url\(["\']?([^"\'()]+)["\']?\)',     # CSS url()
         r'fetch\(["\']([^"\']+)["\']',
         r'ajax\([^)]*url\s*:\s*["\']([^"\']+)["\']',
-        # 相对路径URL (/开头，但不是//或注释)
-        r'(?<![:/])/[a-zA-Z0-9][^\s"\'<>]*'
+        r'(?<![:/])/[a-zA-Z0-9][^\s"\'<>]*'    # 相对路径URL
     ]
 
     all_links = set()
-    domain_tokens = set()      # 纯域名字符串
-    suspicious_set = set()     # 命中黑名单的 URL/域名
+    domain_tokens = set()
+    suspicious_set = set()
 
-    # 统一黑名单比对（全小写）
     if black_patterns:
         black_patterns = [p.lower() for p in black_patterns]
 
     def check_suspicious(candidate):
-        """命中黑名单关键字则加入 suspicious_set（子串匹配）"""
         if not candidate or not black_patterns:
             return
         c = candidate.lower()
@@ -155,28 +78,26 @@ def extract_links(source_code, base_domain=None, black_patterns=None):
     for pattern in url_patterns:
         matches = re.findall(pattern, source_code, re.IGNORECASE)
         for match in matches:
-            # 如果是捕获组的结果，取第一个分组
             if isinstance(match, tuple) and len(match) > 0:
                 match = match[0]
             if match:
                 all_links.add(match.strip())
 
-    # 在任意位置提取纯域名字符串（非完整URL）
+    # 提取纯域名字符串
     for m in DOMAIN_REGEX.findall(source_code):
         if m:
             domain_tokens.add(m.strip().lower())
 
-    # 分类链接
     results = {
-        'external_links': [],        # 外链
-        'possible_hidden_links': [], # 可能的暗链（通过CSS隐藏等）
-        'internal_links': [],        # 内链
-        'other_links': [],           # 其他链接
-        'domain_tokens': [],         # 纯域名字符串（非完整URL也会记录）
-        'suspicious_links': []       # 命中黑名单关键字的 URL/域名
+        'external_links': [],
+        'possible_hidden_links': [],
+        'internal_links': [],
+        'other_links': [],
+        'domain_tokens': [],
+        'suspicious_links': []
     }
 
-    # 查找可能的暗链模式（隐藏的链接）
+    # 可能的暗链模式
     hidden_link_patterns = [
         r'display\s*:\s*none[^>]*href=["\']([^"\']+)["\']',
         r'visibility\s*:\s*hidden[^>]*href=["\']([^"\']+)["\']',
@@ -193,8 +114,7 @@ def extract_links(source_code, base_domain=None, black_patterns=None):
             if match:
                 hidden_links.add(match.strip())
 
-    # 基础域名解析（避免每次循环重复解析）
-    base_host = None    # 例如 www.xxx.com
+    base_host = None
     if base_domain:
         try:
             parsed_base = urlparse(base_domain)
@@ -202,21 +122,17 @@ def extract_links(source_code, base_domain=None, black_patterns=None):
         except Exception:
             base_host = None
 
-    # 处理每个链接
     for link in all_links:
         is_hidden = link in hidden_links
 
-        # 处理相对路径
         full_link = link
         if link.startswith('//'):
             full_link = 'https:' + link
         elif link.startswith('/') and base_domain:
             full_link = base_domain.rstrip('/') + link
 
-        # 黑名单匹配（URL 级别）
         check_suspicious(full_link or link)
 
-        # 判断是否为外链
         is_external = False
         if base_host and full_link.startswith(('http://', 'https://')):
             try:
@@ -226,7 +142,6 @@ def extract_links(source_code, base_domain=None, black_patterns=None):
             except Exception:
                 pass
 
-        # 分类
         if is_hidden:
             results['possible_hidden_links'].append(link)
         elif is_external:
@@ -236,12 +151,10 @@ def extract_links(source_code, base_domain=None, black_patterns=None):
         else:
             results['other_links'].append(link)
 
-    # 处理纯域名字符串
     for domain in domain_tokens:
         results['domain_tokens'].append(domain)
         check_suspicious(domain)
 
-    # 去重 & 排序
     results['external_links'] = sorted(set(results['external_links']))
     results['possible_hidden_links'] = sorted(set(results['possible_hidden_links']))
     results['internal_links'] = sorted(set(results['internal_links']))
@@ -254,15 +167,17 @@ def extract_links(source_code, base_domain=None, black_patterns=None):
 
 def is_source_file(filename, extensions=None, scan_all=False):
     """
-    判断文件是否为源代码文件
+    判断文件是否需要扫描：
+      - scan_all=True：所有文件都扫
+      - 否则：如果指定了 extensions，则按扩展名过滤；没指定就默认所有
     """
     if scan_all:
         return True
-
-    if extensions is None:
-        extensions = DEFAULT_SOURCE_EXTENSIONS
-    ext = os.path.splitext(filename)[1].lower()
-    return ext in extensions
+    if extensions:
+        ext = os.path.splitext(filename)[1].lower()
+        return ext in extensions
+    # 没有指定 extensions，但 scan_all=False 的情况，退回到全扫
+    return True
 
 
 def process_single_file(file_path, base_domain, file_num, total_files, black_patterns=None):
@@ -285,42 +200,135 @@ def process_single_file(file_path, base_domain, file_num, total_files, black_pat
         return (file_path, None)
 
 
-def collect_files(directory, recursive=False, extensions=None, scan_all=False):
-    """收集需要处理的所有文件"""
-    files_to_process = []
+def collect_files(directory, recursive=False, extensions=None, scan_all=False,
+                  exclude_paths=None):
+    """收集需要处理的所有文件（统一使用绝对路径），可以排除指定路径"""
+    exclude_set = set()
+    if exclude_paths:
+        exclude_set = {os.path.abspath(p) for p in exclude_paths}
 
+    files_to_process = []
     for root, dirs, files in os.walk(directory):
         for file in files:
+            file_path = os.path.abspath(os.path.join(root, file))
+
+            # 关键：跳过进度文件（以及未来你想排除的其他文件）
+            if file_path in exclude_set:
+                continue
+
             if is_source_file(file, extensions, scan_all):
-                file_path = os.path.join(root, file)
                 files_to_process.append(file_path)
 
         if not recursive:
             break
-
     return files_to_process
+
+
+
+# ===================== 断点续跑相关函数 =====================
+
+def append_progress_record(progress_file, file_path, links):
+    """
+    将单个文件的分析结果追加写入进度文件（JSONL，一行一条）
+    """
+    if not progress_file:
+        return
+    record = {
+        "file": file_path,
+        "links": links
+    }
+    line = json.dumps(record, ensure_ascii=False)
+    with progress_lock:
+        with open(progress_file, 'a', encoding='utf-8') as pf:
+            pf.write(line + '\n')
+
+
+def load_progress(progress_file, ignore_path=None):
+    """
+    从进度文件恢复已处理文件的结果：
+
+    返回:
+        all_results: {file_path: links_dict}
+        processed_files: set([...])  已经处理过的绝对路径文件集合
+    """
+    all_results = {}
+    processed_files = set()
+
+    if not progress_file or not os.path.exists(progress_file):
+        return all_results, processed_files
+
+    ignore_abs = os.path.abspath(ignore_path) if ignore_path else None
+
+    print(f"[+] 检测到进度文件，尝试从 {progress_file} 恢复...")
+    try:
+        with open(progress_file, 'r', encoding='utf-8') as pf:
+            for line_no, line in enumerate(pf, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    file_path = rec.get("file")
+                    links = rec.get("links")
+                    if not file_path or not isinstance(links, dict):
+                        continue
+                    abs_path = os.path.abspath(file_path)
+
+                    # 关键：忽略进度文件自身（旧版本可能写过进去）
+                    if ignore_abs and abs_path == ignore_abs:
+                        continue
+
+                    processed_files.add(abs_path)
+                    all_results[abs_path] = links
+                except Exception as e:
+                    with print_lock:
+                        print(f"[!] 解析进度文件第 {line_no} 行失败: {e}")
+    except Exception as e:
+        with print_lock:
+            print(f"[!] 读取进度文件失败: {e}")
+
+    print(f"[+] 已从进度文件恢复 {len(processed_files)} 个文件的结果")
+    return all_results, processed_files
 
 
 def process_directory(directory, base_domain=None, recursive=False,
                       extensions=None, scan_all=False, max_workers=4,
-                      black_patterns=None):
+                      black_patterns=None, progress_file=None):
     """
-    处理目录中的所有源代码文件（支持多线程）
+    处理目录中的所有文件（支持多线程 + 断点续跑）
     """
-    results = {}
+    directory = os.path.abspath(directory)
 
-    # 收集所有需要处理的文件
-    files_to_process = collect_files(directory, recursive, extensions, scan_all)
+    # 1. 先从进度文件恢复已有结果（显式忽略进度文件自己）
+    all_results, processed_files = load_progress(progress_file, ignore_path=progress_file)
+
+    # 2. 收集当前目录下所有需要处理的文件，并排除进度文件
+    files_to_process = collect_files(
+        directory,
+        recursive=recursive,
+        extensions=extensions,
+        scan_all=scan_all,
+        exclude_paths=[progress_file] if progress_file else None,
+    )
     total_files = len(files_to_process)
 
     if total_files == 0:
-        return results
+        print("未在目标目录中找到任何需要处理的文件")
+        return all_results
 
-    scan_mode = "所有文件" if scan_all else f"指定扩展名的文件"
-    print(f"找到 {total_files} 个{scan_mode}需要处理")
+    # 3. 计算还需要处理的文件
+    pending_files = [f for f in files_to_process if f not in processed_files]
+    total_pending = len(pending_files)
+
+    print(f"当前目录共发现 {total_files} 个需扫描文件，其中 {len(processed_files)} 个已在进度文件中处理过")
+    print(f"本次需要新增处理的文件数: {total_pending}")
+
+    if total_pending == 0:
+        print("\n所有文件均已处理，无需重新扫描。")
+        return all_results
+
     print(f"使用 {max_workers} 个线程进行并行处理...\n")
 
-    # 使用线程池处理文件
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {
             executor.submit(
@@ -328,21 +336,23 @@ def process_directory(directory, base_domain=None, recursive=False,
                 file_path,
                 base_domain,
                 idx + 1,
-                total_files,
+                total_pending,
                 black_patterns
             ): file_path
-            for idx, file_path in enumerate(files_to_process)
+            for idx, file_path in enumerate(pending_files)
         }
 
-        # 收集结果
         for future in as_completed(future_to_file):
             file_path, links = future.result()
             if links is not None:
-                results[file_path] = links
+                all_results[file_path] = links
+                append_progress_record(progress_file, file_path, links)
 
-    print(f"\n处理完成！共成功处理 {len(results)} 个文件")
-    return results
+    print(f"\n处理完成！共成功处理 {len(all_results)} 个文件（包含历史进度）")
+    return all_results
 
+
+# ===================== HTTP 探测相关 =====================
 
 def normalize_url_for_probe(target):
     """将提取到的字符串归一化为可探测的 URL"""
@@ -357,35 +367,20 @@ def normalize_url_for_probe(target):
     if t.startswith('//'):
         return 'http:' + t
     if t.startswith('/'):
-        # 相对路径没办法单独探测，这里直接丢弃
         return None
-    # 纯域名或其他：默认加 http://
     return 'http://' + t
 
 
 def probe_single_url(url, timeout=5.0, black_patterns=None, max_body_len=200000):
     """
     对单个 URL 进行 HTTP 探测：
-      1. 先按传入的 URL 原样访问（通常是 http://）
-      2. 如果原始 URL 是 http:// 且访问时抛出异常，则自动改为 https:// 再试一次
-      3. 成功任意一次就返回结果；两次都失败则返回最后一次的 error
-
-    返回:
-        {
-          'status_code': int,
-          'final_url': str,
-          'headers': {...},
-          'body_keyword_hits': [...],
-        }
-        或 {'error': '...'}
+      1. 先按传入的 URL 原样访问
+      2. 若是 http:// 且失败，再自动尝试 https://
     """
-    # 构造尝试列表：先原始 URL，再可能的 https 版本
     attempt_urls = [url]
 
     parsed = urlparse(url)
-    # 只有在原始 scheme 是 http 时，才加一个 https 备选
     if parsed.scheme == "http":
-        # 构造一个 https:// 的 URL，保留主机、路径和查询参数
         https_parsed = parsed._replace(scheme="https", netloc=parsed.netloc)
         https_url = urlunparse((
             https_parsed.scheme,
@@ -393,7 +388,7 @@ def probe_single_url(url, timeout=5.0, black_patterns=None, max_body_len=200000)
             https_parsed.path or "",
             https_parsed.params or "",
             https_parsed.query or "",
-            ""  # fragment 对探测无意义，直接丢弃
+            ""
         ))
         if https_url != url:
             attempt_urls.append(https_url)
@@ -419,7 +414,6 @@ def probe_single_url(url, timeout=5.0, black_patterns=None, max_body_len=200000)
                 if key in headers:
                     interesting_headers[key] = headers[key]
 
-            # 在页面内容中匹配黑名单关键词
             hits = []
             if black_patterns:
                 try:
@@ -434,43 +428,28 @@ def probe_single_url(url, timeout=5.0, black_patterns=None, max_body_len=200000)
 
             return {
                 'status_code': resp.status_code,
-                'final_url': resp.url,         # 可能已经被 302 到 https
+                'final_url': resp.url,
                 'headers': interesting_headers,
                 'body_keyword_hits': sorted(set(hits)),
-                # 你要的话也可以额外加上这次真正请求的 URL：
-                # 'request_url': attempt_url,
             }
         except Exception as e:
-            # 记录错误，换下一个 URL 继续尝试（比如从 http 换 https）
             last_error = str(e)
 
-    # 两次都失败（或者只有一次且失败）
     return {'error': last_error or 'unknown error'}
-
 
 
 def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5.0):
     """
     对疑似黑链 / 域名字符串进行 HTTP 探测（已在全局维度去重）
-
-    - 探测对象仅包括：
-        * suspicious_links（命中黑名单关键字的可疑链接/域名）
-        * domain_tokens（代码中出现的疑似域名字符串）
-    - 先基于上述两类数据在全局合并、去重，再进行 HTTP 探测，避免重复请求
-    - 如果页面 Body 中命中黑名单关键词，则把对应链接回填到各文件的 suspicious_links 中
     """
     if requests is None:
         print("\n[!] 未安装 requests 库，无法进行 HTTP 探测。请先安装：pip install requests")
         return None
 
-    # 统一将黑名单转为小写，以便匹配
     lower_black = [p.lower() for p in (black_patterns or [])]
 
-    # ---------- 第 1 步：全局收集 & 去重原始字符串 ----------
-    # raw_targets 存放全局的“原始字符串”（可能是域名 / URL）
     raw_targets = set()
     for file_path, links in all_results.items():
-        # 只基于这两个字段构建全局目标集合
         for item in links.get('suspicious_links', []):
             if item:
                 raw_targets.add(item.strip())
@@ -482,20 +461,14 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
         print("\n没有需要进行 HTTP 探测的链接/域名（suspicious_links & domain_tokens 为空）。")
         return {}
 
-    # ---------- 第 2 步：原始字符串 -> 归一化 URL（去重） ----------
-    # url_to_sources 映射：
-    #   归一化后的 URL -> { (file_path, 原始字符串) , ... }
     url_to_sources = {}
-
     for file_path, links in all_results.items():
-        # 针对每个文件的 suspicious_links 和 domain_tokens 进行映射
         for key in ('suspicious_links', 'domain_tokens'):
             for item in links.get(key, []):
                 if not item:
                     continue
                 raw = item.strip()
                 if raw not in raw_targets:
-                    # 不在全局目标集合内（理论上不会出现），直接跳过
                     continue
                 u = normalize_url_for_probe(raw)
                 if not u:
@@ -509,7 +482,6 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
 
     print(f"\n开始对 {len(targets)} 个去重后的链接/域名进行 HTTP 探测（超时 {timeout}s，线程 {max_workers}）...")
 
-    # ---------- 第 3 步：并发探测 ----------
     results = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_url = {
@@ -521,7 +493,6 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
             info = future.result()
             results[url] = info
 
-            # 控制台输出
             with print_lock:
                 if 'error' in info:
                     print(f"[探测失败] {url} -> {info['error']}")
@@ -532,7 +503,6 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
                     else:
                         print(f"[探测成功] {url} -> {info['status_code']} {info.get('final_url', '')}")
 
-            # ---------- 第 4 步：如果页面命中黑链关键词，则回填到对应文件的 suspicious_links 中 ----------
             hits = info.get('body_keyword_hits') or []
             if hits:
                 for file_path, raw in url_to_sources.get(url, []):
@@ -543,9 +513,10 @@ def probe_suspicious_links(all_results, black_patterns, max_workers=8, timeout=5
     return results
 
 
+# ===================== 报告生成 =====================
+
 def format_results(all_results, probe_results=None):
     """格式化所有文件的分析结果为字符串（可附带 HTTP 探测结果）"""
-
     output = []
     total_hidden = 0
     total_external = 0
@@ -554,11 +525,9 @@ def format_results(all_results, probe_results=None):
     total_domain_tokens = 0
     total_suspicious = 0
 
-    # 全局去重集合（用于最终汇总）
     global_domain_tokens = set()
     global_suspicious_links = set()
 
-    # 首先统计总数 + 收集全局集合
     for file_path, links in all_results.items():
         total_hidden += len(links['possible_hidden_links'])
         total_external += len(links['external_links'])
@@ -587,11 +556,10 @@ def format_results(all_results, probe_results=None):
     if total_suspicious:
         output.append(f"其中 {total_suspicious} 个命中黑名单关键字（疑似黑链）")
     else:
-        output.append(f"未发现命中黑名单关键字的链接/域名")
+        output.append("未发现命中黑名单关键字的链接/域名")
     output.append("=" * 80)
     output.append("")
 
-    # 逐个文件显示结果
     for file_path, links in all_results.items():
         output.append(f"文件: {file_path}")
 
@@ -642,7 +610,6 @@ def format_results(all_results, probe_results=None):
         output.append("-" * 80)
         output.append("")
 
-    # ===================== 全局汇总区块（你想要的“最后统一整理”） =====================
     output.append("=" * 80)
     output.append("全局汇总（去重后的疑似域名字符串 & 可疑链接/域名）")
     output.append("=" * 80)
@@ -657,8 +624,8 @@ def format_results(all_results, probe_results=None):
             output.append(f"  - {d}")
     else:
         output.append("疑似域名字符串列表（去重后）：(无)")
-
     output.append("")
+
     output.append(f"去重后的命中黑名单关键字的可疑链接/域名总数: {len(dedup_suspicious)}")
     if dedup_suspicious:
         output.append("命中黑名单关键字的可疑链接/域名列表（去重后）：")
@@ -666,34 +633,29 @@ def format_results(all_results, probe_results=None):
             output.append(f"  - {s}")
     else:
         output.append("命中黑名单关键字的可疑链接/域名列表（去重后）：(无)")
-
     output.append("")
 
-    # ===================== 附加 HTTP 探测结果 =====================
     if probe_results:
-        # 先做一个状态码维度的全局汇总（按原始探测 URL 去重）
         status_buckets = {
             200: set(),
             404: set(),
             403: set(),
             401: set(),
             302: set(),
-            "other": set(),   # 其他状态码统一归到这里
+            "other": set(),
         }
 
         for url, info in probe_results.items():
             if not isinstance(info, dict):
                 continue
             if 'error' in info:
-                # 探测失败的不计入状态码汇总
                 continue
             code = info.get('status_code')
             if isinstance(code, int) and code in status_buckets:
-                status_buckets[code].add(url)   # 这里的 url 就是“原始探测 URL”
+                status_buckets[code].add(url)
             elif isinstance(code, int):
                 status_buckets["other"].add(url)
 
-        # 1. 先打印状态码汇总（你需要的那一块）
         output.append("=" * 80)
         output.append("HTTP 探测状态码汇总（按原始探测 URL 去重）")
         output.append("=" * 80)
@@ -717,7 +679,6 @@ def format_results(all_results, probe_results=None):
             output.append("  (无)")
         output.append("")
 
-        # 2. 再打印详细的 HTTP 探测结果（保留你原有的详细信息）
         output.append("=" * 80)
         output.append("HTTP 探测结果（按可疑URL归并）")
         output.append("=" * 80)
@@ -746,13 +707,11 @@ def format_results(all_results, probe_results=None):
 
 
 def print_results(all_results, probe_results=None):
-    """打印所有文件的分析结果"""
     output = format_results(all_results, probe_results)
     print(output)
 
 
 def save_results_to_file(all_results, output_file, probe_results=None):
-    """将结果保存到txt文件"""
     try:
         output = format_results(all_results, probe_results)
         with open(output_file, 'w', encoding='utf-8') as f:
@@ -766,14 +725,14 @@ def save_results_to_file(all_results, output_file, probe_results=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='提取目录中所有源代码文件的暗链和外链地址（支持多线程加速，并可对疑似黑链进行HTTP探测）',
+        description='提取目录中所有源代码文件的暗链和外链地址（支持多线程加速、断点续跑，并可对疑似黑链进行HTTP探测）',
         epilog='示例:\n'
-               '  %(prog)s -d /path/to/dir                  # 扫描指定目录\n'
-               '  %(prog)s --all                            # 扫描所有文件（不限扩展名）\n'
+               '  %(prog)s -d /path/to/dir                  # 扫描指定目录（默认全后缀）\n'
+               '  %(prog)s --progress-file cache.jsonl      # 指定进度文件\n'
                '  %(prog)s -e html,php,js                   # 只扫描指定扩展名\n'
                '  %(prog)s -t 8                             # 使用8个线程加速\n'
                '  %(prog)s -b https://example.com           # 指定基础域名识别外链\n'
-               '  %(prog)s -bl blacklist.txt                # 在内置关键词基础上追加黑链域名/关键字列表\n'
+               '  %(prog)s -bl blacklist.txt                # 追加黑链域名/关键字列表\n'
                '  %(prog)s --probe                          # 对疑似黑链进行HTTP探测\n',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -788,16 +747,20 @@ def main():
     parser.add_argument('--no-timestamp', action='store_true',
                         help='输出文件名不包含时间戳')
 
+    # 进度文件
+    parser.add_argument('--progress-file',
+                        help='进度记录文件路径（JSONL，一行一条），用于断点续跑；不指定则默认放在目标目录下 .url_extraction_progress.jsonl')
+
     # 递归选项
     parser.add_argument('-r', '--recursive', action='store_true', default=True,
                         help='是否递归处理子目录（默认启用）')
     parser.add_argument('-nr', '--no-recursive', action='store_true',
                         help='不递归处理子目录')
 
-    # 扫描模式选项（互斥）
+    # 扫描模式
     scan_group = parser.add_mutually_exclusive_group()
     scan_group.add_argument('-e', '--extensions',
-                            help='逗号分隔的文件扩展名（如: html,php,js）或（.html,.php,.js）')
+                            help='逗号分隔的文件扩展名（如: html,php,js 或 .html,.php,.js）')
     scan_group.add_argument('-a', '--all', action='store_true',
                             help='扫描所有文件（不限扩展名，可能较慢）')
 
@@ -807,7 +770,7 @@ def main():
 
     # 黑链关键字 / 域名片段列表文件（追加）
     parser.add_argument('-bl', '--blacklist',
-                        help='黑链域名/关键字列表文件，每行一个，支持子串匹配（如：ceshi.xyz、ppp.qr 等），会在内置关键词基础上追加')
+                        help='黑链域名/关键字列表文件，每行一个，支持子串匹配')
 
     # HTTP 探测相关参数
     parser.add_argument('--probe', action='store_true',
@@ -819,7 +782,9 @@ def main():
 
     args = parser.parse_args()
 
-    # 处理输出文件名，添加时间戳
+    target_dir = os.path.abspath(args.directory)
+
+    # 输出文件名
     if args.output:
         output_file = args.output
     else:
@@ -828,33 +793,36 @@ def main():
             output_file = 'url_extraction_results.txt'
         else:
             output_file = f'url_extraction_results_{timestamp}.txt'
+    output_file = os.path.abspath(output_file)
 
-    # 验证线程数
+    # 进度文件路径
+    if args.progress_file:
+        progress_file = os.path.abspath(args.progress_file)
+    else:
+        progress_file = os.path.join(target_dir, '.url_extraction_progress.jsonl')
+
+    # 线程数限制
     if args.threads < 1:
         args.threads = 1
     elif args.threads > 32:
         print(f"警告：线程数 {args.threads} 过大，已限制为 32")
         args.threads = 32
 
-    # 处理递归选项
+    # 递归开关
     recursive = args.recursive and not args.no_recursive
 
-    # 处理扫描模式
+    # 扫描模式：默认“全扩展名扫描”
     extensions = None
-    # 默认：扫描所有文件，避免漏任何后缀
     scan_all = True
 
     if args.extensions:
-        # 如果显式指定了扩展名，则只扫描这些扩展名
         scan_all = False
         extensions = {ext.strip().lower() for ext in args.extensions.split(',')}
         extensions = {ext if ext.startswith('.') else '.' + ext for ext in extensions}
     elif args.all:
-        # 显式 --all 与默认行为一致，这里只是保持参数兼容
         scan_all = True
 
-
-    # 构造黑名单关键字/域名片段列表：内置 + 文件追加
+    # 黑名单合并
     black_patterns = list(BLACKLINK_KEYWORDS)
     if args.blacklist:
         try:
@@ -868,11 +836,11 @@ def main():
         except Exception as e:
             print(f"读取黑名单文件失败: {e}")
 
-    # 打印配置信息
+    # 配置信息
     print("=" * 60)
     print("URL提取工具 - 配置信息")
     print("=" * 60)
-    print(f"目标目录: {os.path.abspath(args.directory)}")
+    print(f"目标目录: {target_dir}")
     print(f"递归扫描: {'是' if recursive else '否'}")
 
     if scan_all and not extensions:
@@ -883,7 +851,8 @@ def main():
         print("扫描模式: 扫描所有文件（当前未指定扩展名）")
 
     print(f"线程数量: {args.threads}")
-    print(f"输出文件: {os.path.abspath(output_file)}")
+    print(f"输出文件: {output_file}")
+    print(f"进度文件: {progress_file}")
     if args.base_domain:
         print(f"基础域名: {args.base_domain}")
     print(f"内置黑链关键词数量: {len(BLACKLINK_KEYWORDS)}")
@@ -897,15 +866,16 @@ def main():
     print("=" * 60)
     print()
 
-    # 开始处理
+    # 执行扫描
     all_results = process_directory(
-        args.directory,
+        target_dir,
         base_domain=args.base_domain,
         recursive=recursive,
         extensions=extensions,
         scan_all=scan_all,
         max_workers=args.threads,
-        black_patterns=black_patterns
+        black_patterns=black_patterns,
+        progress_file=progress_file
     )
 
     probe_results = None
@@ -917,7 +887,6 @@ def main():
             timeout=args.probe_timeout
         )
 
-    # 显示和保存结果
     if all_results:
         print_results(all_results, probe_results)
         save_results_to_file(all_results, output_file, probe_results)
