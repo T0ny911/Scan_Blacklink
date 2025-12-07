@@ -68,6 +68,8 @@ Dec 17 update:
 
 Added script program execution recovery functionality; parameters remain unchanged.
 
+❗️However, note that when the program resumes execution, it will create a .jsonl file within the current source code directory. After the script completes, this file must be manually deleted to prevent subsequent executions from referencing its contents, which could lead to inaccurate results.
+
 <img width="1771" height="446" alt="image" src="https://github.com/user-attachments/assets/bf76bf29-b95b-4e11-a895-0fd325fcc8c7" />
 
 
@@ -154,6 +156,8 @@ python3 scan_blacklink.py -d /path/to/dir --probe
 12月7日更新: 
 
 新增脚本程序恢复执行功能，使用参数依然不变
+
+❗️但要注意，程序恢复执行功能，它会在当前源码目录里面创建一个.jsonl文件，当脚本程序完成后，需要手动删除该文件，避免过一段时间后再次执行该脚本会调用这个进度文件内容，造成结果不准确的现象。
 
 <img width="1771" height="446" alt="image" src="https://github.com/user-attachments/assets/bf76bf29-b95b-4e11-a895-0fd325fcc8c7" />
 
