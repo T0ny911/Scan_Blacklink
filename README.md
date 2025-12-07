@@ -64,6 +64,15 @@ python3 scan_blacklink.py -d /path/to/dir --probe
 During the process of scanning source code, extract corresponding domain names while simultaneously performing HTTP probes to obtain response information.
 ```
 
+Dec 17 update:
+
+Added script program execution recovery functionality; parameters remain unchanged.
+
+<img width="1771" height="446" alt="image" src="https://github.com/user-attachments/assets/bf76bf29-b95b-4e11-a895-0fd325fcc8c7" />
+
+
+
+
 ### 2、Get_Pagesource:
 
 This script's functionality involves using Selenium to simulate requests, then downloading the corresponding frontend page source code files locally. Simply define the target URL within the script code to enable automated crawling. Of course, you'll need to configure the proxy auto-switching mode to avoid having your IP blocked by WAF.
@@ -141,6 +150,12 @@ python3 scan_blacklink.py -d /path/to/dir --probe
 
 在扫描源码的过程中提取对应的域名并同时进行HTTP探测获取响应信息
 ```
+
+12月7日更新: 
+
+新增脚本程序恢复执行功能，使用参数依然不变
+
+<img width="1771" height="446" alt="image" src="https://github.com/user-attachments/assets/bf76bf29-b95b-4e11-a895-0fd325fcc8c7" />
 
 
 ### 2、Get_Pagesource:
